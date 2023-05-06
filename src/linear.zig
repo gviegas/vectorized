@@ -85,6 +85,29 @@ fn VecN(comptime n: comptime_int, comptime T: type) type {
                 .v = @shuffle(T, imag, real, @Vector(4, i32){ 0, 1, 2, -1 }),
             };
         }
+
+        /// New elements are set to zero.
+        pub fn resize(self: Self, comptime new_n: comptime_int) VecN(new_n, T) {
+            switch (new_n) {
+                0...1 => @compileError("unreachable"),
+                n => return self,
+                else => {
+                    const mask = comptime x: {
+                        var m: @Vector(new_n, T) = undefined;
+                        for (0..@min(n, new_n)) |i| {
+                            m[i] = i;
+                        }
+                        if (new_n > n) {
+                            for (n..new_n) |i| {
+                                m[i] = -1;
+                            }
+                        }
+                        break :x m;
+                    };
+                    return VecN(new_n, T){ .v = @shuffle(T, self.v, @Vector(1, T){0}, mask) };
+                },
+            }
+        }
     };
 }
 
@@ -144,6 +167,23 @@ test "linear.Vec4.mulQuaternion" {
     }
 }
 
+test "linear.VecN.resize" {
+    const v = init4(f64, 0.1, 0.2, -0.3, -0.4);
+    const u = v.resize(8);
+    for (0..4) |i| {
+        try expectEqual(v.v[i], u.v[i]);
+        try expectEqual(u.v[i + 4], 0);
+    }
+    const w = v.resize(3);
+    try expectEqual(w.v, @Vector(3, f64){ 0.1, 0.2, -0.3 });
+    const s = v.resize(2);
+    try expectEqual(s.v, @Vector(2, f64){ 0.1, 0.2 });
+    const t = s.resize(4);
+    try expectEqual(t.v, @Vector(4, f64){ 0.1, 0.2, 0, 0 });
+    try expectEqual(w.resize(2).resize(3).resize(4).v, t.v);
+    try expectEqual(v.resize(4).v, v.v);
+}
+
 pub fn Vec2x2(comptime T: type) type {
     return VecNxN(2, T);
 }
@@ -166,7 +206,7 @@ fn VecNxN(comptime n: comptime_int, comptime T: type) type {
 
         pub fn identity(self: *Self) void {
             self.v = @splat(n * n, @as(T, 0));
-            inline for (0..n) |i| {
+            for (0..n) |i| {
                 self.v[i * n + i] = 1;
             }
         }
@@ -182,8 +222,8 @@ fn VecNxN(comptime n: comptime_int, comptime T: type) type {
         pub fn mul(self: Self, other: Self) Self {
             const row_mask = comptime x: {
                 var m: [n]@Vector(n, i32) = undefined;
-                inline for (0..n) |i| {
-                    inline for (0..n) |j| {
+                for (0..n) |i| {
+                    for (0..n) |j| {
                         m[i][j] = i + n * j;
                     }
                 }
@@ -192,8 +232,8 @@ fn VecNxN(comptime n: comptime_int, comptime T: type) type {
 
             const col_mask = comptime x: {
                 var m: [n]@Vector(n, i32) = undefined;
-                inline for (0..n) |i| {
-                    inline for (0..n) |j| {
+                for (0..n) |i| {
+                    for (0..n) |j| {
                         m[i][j] = i * n + j;
                     }
                 }
@@ -216,8 +256,8 @@ fn VecNxN(comptime n: comptime_int, comptime T: type) type {
         pub fn mulVecN(self: Self, vecN: VecN(n, T)) VecN(n, T) {
             const row_mask = comptime x: {
                 var m: [n]@Vector(n, i32) = undefined;
-                inline for (0..n) |i| {
-                    inline for (0..n) |j| {
+                for (0..n) |i| {
+                    for (0..n) |j| {
                         m[i][j] = i + n * j;
                     }
                 }
@@ -237,8 +277,8 @@ fn VecNxN(comptime n: comptime_int, comptime T: type) type {
         pub fn transpose(self: Self) Self {
             const mask = comptime x: {
                 var m: @Vector(n * n, i32) = undefined;
-                inline for (0..n) |i| {
-                    inline for (0..n) |j| {
+                for (0..n) |i| {
+                    for (0..n) |j| {
                         m[i * n + j] = i + n * j;
                     }
                 }
@@ -389,6 +429,33 @@ fn VecNxN(comptime n: comptime_int, comptime T: type) type {
                 },
                 else => @compileError("inversion not implemented for n > 4"),
             }
+        }
+
+        pub fn upperLeft(self: VecNxN(4, T)) VecNxN(3, T) {
+            const mask = @Vector(9, i32){ 0, 1, 2, 4, 5, 6, 8, 9, 10 };
+            return VecNxN(3, T){ .v = @shuffle(T, self.v, undefined, mask) };
+        }
+
+        pub fn columnAt(self: Self, comptime index: comptime_int) VecN(n, T) {
+            const mask = comptime x: {
+                var m: @Vector(n, i32) = undefined;
+                for (0..n) |i| {
+                    m[i] = index * n + i;
+                }
+                break :x m;
+            };
+            return VecN(n, T){ .v = @shuffle(T, self.v, undefined, mask) };
+        }
+
+        pub fn rowAt(self: Self, comptime index: comptime_int) VecN(n, T) {
+            const mask = comptime x: {
+                var m: @Vector(n, i32) = undefined;
+                for (0..n) |i| {
+                    m[i] = index + i * n;
+                }
+                break :x m;
+            };
+            return VecN(n, T){ .v = @shuffle(T, self.v, undefined, mask) };
         }
     };
 }
@@ -553,6 +620,119 @@ test "linear.VecNxN.invert" {
     }
 }
 
+test "linear.Vec4x4.upperLeft" {
+    const m = init4x4(f32, 0.1, 0.2, 0.3, 1, 0.4, 0.5, 0.6, 2, 0.7, 0.8, 0.9, 3, 4, 5, 6, 7)
+        .upperLeft();
+    try expectEqual(m.v, @Vector(9, f32){ 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9 });
+}
+
+test "linear.VecNxN.columnAt/rowAt" {
+    const m = init3x3(i8, 9, 8, 7, 6, 5, 4, 3, 2, 1);
+    const n = m.transpose();
+    inline for (0..3, [_]@Vector(3, i8){ .{ 9, 8, 7 }, .{ 6, 5, 4 }, .{ 3, 2, 1 } }) |i, x| {
+        try expectEqual(x, m.columnAt(i).v);
+        try expectEqual(x, n.rowAt(i).v);
+    }
+}
+
+pub fn init2(comptime T: type, v0: T, v1: T) Vec2(T) {
+    return Vec2(T){ .v = .{ v0, v1 } };
+}
+
+pub fn init3(comptime T: type, v0: T, v1: T, v2: T) Vec3(T) {
+    return Vec3(T){ .v = .{ v0, v1, v2 } };
+}
+
+pub fn init4(comptime T: type, v0: T, v1: T, v2: T, v3: T) Vec4(T) {
+    return Vec4(T){ .v = .{ v0, v1, v2, v3 } };
+}
+
+pub fn init2x2(
+    comptime T: type,
+    c0_r0: T,
+    c0_r1: T,
+    c1_r0: T,
+    c1_r1: T,
+) Vec2x2(T) {
+    return Vec2x2(T){ .v = .{
+        c0_r0, c0_r1,
+        c1_r0, c1_r1,
+    } };
+}
+
+pub fn init3x3(
+    comptime T: type,
+    c0_r0: T,
+    c0_r1: T,
+    c0_r2: T,
+    c1_r0: T,
+    c1_r1: T,
+    c1_r2: T,
+    c2_r0: T,
+    c2_r1: T,
+    c2_r2: T,
+) Vec3x3(T) {
+    return Vec3x3(T){ .v = .{
+        c0_r0, c0_r1, c0_r2,
+        c1_r0, c1_r1, c1_r2,
+        c2_r0, c2_r1, c2_r2,
+    } };
+}
+
+pub fn init4x4(
+    comptime T: type,
+    c0_r0: T,
+    c0_r1: T,
+    c0_r2: T,
+    c0_r3: T,
+    c1_r0: T,
+    c1_r1: T,
+    c1_r2: T,
+    c1_r3: T,
+    c2_r0: T,
+    c2_r1: T,
+    c2_r2: T,
+    c2_r3: T,
+    c3_r0: T,
+    c3_r1: T,
+    c3_r2: T,
+    c3_r3: T,
+) Vec4x4(T) {
+    return Vec4x4(T){ .v = .{
+        c0_r0, c0_r1, c0_r2, c0_r3,
+        c1_r0, c1_r1, c1_r2, c1_r3,
+        c2_r0, c2_r1, c2_r2, c2_r3,
+        c3_r0, c3_r1, c3_r2, c3_r3,
+    } };
+}
+
+test "linear.init*" {
+    {
+        const v = init2(u32, 100, 200);
+        try expectEqual(v.v, @Vector(2, u32){ 100, 200 });
+    }
+    {
+        const v = init3(i16, 32767, -1, -32768);
+        try expectEqual(v.v, @Vector(3, i16){ 32767, -1, -32768 });
+    }
+    {
+        const v = init4(f64, -0.125, 2.5, -66.1, 0.001);
+        try expectEqual(v.v, @Vector(4, f64){ -0.125, 2.5, -66.1, 0.001 });
+    }
+    {
+        const m = init2x2(u8, 1, 2, 3, 4);
+        try expectEqual(m.v, @Vector(4, u8){ 1, 2, 3, 4 });
+    }
+    {
+        const m = init3x3(i64, 1, 2, 3, 4, 5, 6, 7, 8, 9);
+        try expectEqual(m.v, @Vector(9, i64){ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
+    }
+    {
+        const m = init4x4(f32, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16);
+        try expectEqual(m.v, @Vector(16, f32){ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 });
+    }
+}
+
 pub fn zero2(comptime T: type) Vec2(T) {
     return Vec2(T){ .v = .{ 0, 0 } };
 }
@@ -577,6 +757,33 @@ test "linear.zero*" {
     {
         const v = zero4(u16);
         try expectEqual(v.v, @splat(4, @as(u16, 0)));
+    }
+}
+
+pub fn splat2(comptime T: type, val: T) Vec2(T) {
+    return Vec2(T){ .v = @splat(2, val) };
+}
+
+pub fn splat3(comptime T: type, val: T) Vec3(T) {
+    return Vec3(T){ .v = @splat(3, val) };
+}
+
+pub fn splat4(comptime T: type, val: T) Vec4(T) {
+    return Vec4(T){ .v = @splat(4, val) };
+}
+
+test "linear.splat*" {
+    {
+        const v = splat2(i32, -1);
+        try expectEqual(v.v, @splat(2, @as(i32, -1)));
+    }
+    {
+        const v = splat3(f32, 0.25);
+        try expectEqual(v.v, @splat(3, @as(f32, 0.25)));
+    }
+    {
+        const v = splat4(u8, 255);
+        try expectEqual(v.v, @splat(4, @as(u8, 255)));
     }
 }
 
